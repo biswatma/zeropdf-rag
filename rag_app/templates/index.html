@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG PDF Chatbot</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+        .container {
+            max-width: 800px;
+            margin: 2rem auto;
+            padding: 2rem;
+            background-color: #ffffff;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+        .message-bubble {
+            padding: 0.9rem 1.2rem;
+            border-radius: 1.2rem;
+            margin-bottom: 0.75rem;
+            max-width: 80%;
+            word-wrap: break-word;
+            line-height: 1.5;
+        }
+        .user-message {
+            background-color: #3b82f6; /* blue-500 */
+            color: white;
+            align-self: flex-end;
+            border-bottom-right-radius: 0.4rem;
+        }
+        .bot-message {
+            background-color: #e5e7eb; /* gray-200 */
+            color: #374151; /* gray-700 */
+            align-self: flex-start;
+            border-bottom-left-radius: 0.4rem;
+        }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-left-color: #3b82f6;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center">
+    <div class="container bg-white p-10 rounded-xl shadow-2xl w-full max-w-4xl">
+        <h1 class="text-4xl font-extrabold text-gray-900 text-center mb-8 tracking-tight">RAG PDF Chatbot</h1>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10">
+            <div class="p-8 border border-gray-200 rounded-lg bg-gradient-to-br from-blue-50 to-indigo-100 shadow-md">
+                <h2 class="text-2xl font-bold text-gray-800 mb-5">Upload PDF</h2>
+                <form id="uploadForm" enctype="multipart/form-data" class="flex flex-col space-y-5">
+                    <label for="pdf_file" class="block text-sm font-medium text-gray-700">Select your PDF document:</label>
+                    <input type="file" id="pdf_file" name="pdf_file" accept=".pdf" class="block w-full text-sm text-gray-700
+                        file:mr-4 file:py-3 file:px-6
+                        file:rounded-full file:border-0
+                        file:text-sm file:font-semibold
+                        file:bg-blue-200 file:text-blue-800
+                        hover:file:bg-blue-300 cursor-pointer transition-colors duration-200"/>
+                    <button type="submit" class="bg-blue-700 text-white py-3 px-6 rounded-lg hover:bg-blue-800 transition-all duration-300 ease-in-out transform hover:scale-105 shadow-lg">
+                        Upload and Process PDF
+                    </button>
+                </form>
+                <p id="uploadStatus" class="mt-6 text-center text-sm font-medium text-gray-700"></p>
+            </div>
+
+            <div class="p-8 border border-gray-200 rounded-lg bg-gradient-to-br from-green-50 to-teal-100 shadow-md">
+                <h2 class="text-2xl font-bold text-gray-800 mb-5">Ask a Question</h2>
+                <div id="chatbox" class="h-96 overflow-y-auto border border-gray-300 rounded-lg p-5 mb-6 bg-white shadow-inner flex flex-col space-y-3">
+                    <!-- Chat messages will appear here -->
+                    <div class="message-bubble bot-message self-start">
+                        Upload a PDF to get started!
+                    </div>
+                </div>
+                <div class="flex space-x-4">
+                    <input type="text" id="questionInput" placeholder="Type your question here..."
+                           class="flex-grow p-4 border border-gray-300 rounded-lg focus:outline-none focus:ring-3 focus:ring-blue-500 shadow-sm transition-all duration-200"/>
+                    <button id="sendButton" class="bg-blue-700 text-white py-3 px-6 rounded-lg hover:bg-blue-800 transition-all duration-300 ease-in-out transform hover:scale-105 shadow-lg">
+                        Send
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', async function(event) {
+            event.preventDefault();
+            const formData = new FormData();
+            const pdfFile = document.getElementById('pdf_file').files[0];
+            formData.append('pdf_file', pdfFile);
+
+            const uploadStatus = document.getElementById('uploadStatus');
+            uploadStatus.textContent = 'Uploading and processing PDF...';
+            uploadStatus.classList.remove('text-green-600', 'text-red-600');
+            uploadStatus.classList.add('text-blue-600');
+
+            try {
+                const response = await fetch('/upload_pdf', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+                if (response.ok) {
+                    uploadStatus.textContent = result.message;
+                    uploadStatus.classList.remove('text-blue-600');
+                    uploadStatus.classList.add('text-green-600');
+                    addMessage('bot', 'PDF processed successfully! You can now ask questions.');
+                } else {
+                    uploadStatus.textContent = `Error: ${result.error}`;
+                    uploadStatus.classList.remove('text-blue-600');
+                    uploadStatus.classList.add('text-red-600');
+                }
+            } catch (error) {
+                uploadStatus.textContent = `Network error: ${error.message}`;
+                uploadStatus.classList.remove('text-blue-600');
+                uploadStatus.classList.add('text-red-600');
+            }
+        });
+
+        document.getElementById('sendButton').addEventListener('click', sendMessage);
+        document.getElementById('questionInput').addEventListener('keypress', function(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        async function sendMessage() {
+            const questionInput = document.getElementById('questionInput');
+            const chatbox = document.getElementById('chatbox');
+            const question = questionInput.value.trim();
+
+            if (question === '') return;
+
+            addMessage('user', question);
+            questionInput.value = '';
+
+            const loadingMessage = addMessage('bot', '<div class="spinner"></div>', true); // Add loading spinner
+
+            try {
+                const response = await fetch('/ask_question', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ question: question })
+                });
+                const result = await response.json();
+
+                // Remove loading spinner
+                chatbox.removeChild(loadingMessage);
+
+                if (response.ok) {
+                    addMessage('bot', result.answer);
+                } else {
+                    addMessage('bot', `Error: ${result.error}`);
+                }
+            } catch (error) {
+                // Remove loading spinner
+                chatbox.removeChild(loadingMessage);
+                addMessage('bot', `Network error: ${error.message}`);
+            }
+            chatbox.scrollTop = chatbox.scrollHeight; // Scroll to bottom
+        }
+
+        function addMessage(sender, text, isHtml = false) {
+            const chatbox = document.getElementById('chatbox');
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('message-bubble');
+
+            if (sender === 'user') {
+                messageDiv.classList.add('user-message', 'self-end');
+            } else {
+                messageDiv.classList.add('bot-message', 'self-start');
+            }
+
+            if (isHtml) {
+                messageDiv.innerHTML = text;
+            } else {
+                messageDiv.textContent = text;
+            }
+            chatbox.appendChild(messageDiv);
+            chatbox.scrollTop = chatbox.scrollHeight; // Scroll to bottom
+            return messageDiv; // Return the message element for potential removal (e.g., loading spinner)
+        }
+    </script>
+</body>
+</html>
