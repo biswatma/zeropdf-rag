@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Model Load Test</title>
+</head>
+<body>
+    <h1>Testing Model Download</h1>
+    <p>Check the browser console (F12) for logs and network requests.</p>
+    <div id="status">Starting...</div>
+
+    <script type="module">
+        import { AutoTokenizer, AutoModelForCausalLM } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@2.17.1/dist/transformers.min.js';
+
+        const statusDiv = document.getElementById('status');
+        const llm_model_id = "HuggingFaceTB/SmolLM2-1.7B-Instruct";
+
+        const worker = new Worker('{{ url_for("static", filename="js/worker.js") }}', { type: 'module' });
+
+        worker.onmessage = (event) => {
+            const { type, status, message, progress, file, url, error } = event.data;
+            if (type === 'progress') {
+                statusDiv.textContent = `Downloading ${file} (${Math.round(progress * 100)}%)`;
+                console.log(`Worker progress: ${message}`);
+            } else if (type === 'status') {
+                statusDiv.textContent = message;
+                console.log(`Worker status: ${message}`);
+                if (status === 'ready') {
+                    console.log("Model is ready in worker.");
+                } else if (status === 'error') {
+                    console.error("Worker reported error:", message);
+                }
+            } else if (type === 'critical_error') {
+                statusDiv.textContent = `Critical Worker Error: ${message}`;
+                console.error("Critical Worker Error:", message);
+            }
+        };
+
+        worker.onerror = (e) => {
+            statusDiv.textContent = `Worker Error: ${e.message || 'Unknown error. Check console.'}`;
+            console.error("Worker.onerror caught:", e);
+        };
+
+        // No direct testLoad() call here, the worker will handle loading
+        statusDiv.textContent = 'Worker initialized. Waiting for model...';
+    </script>
+</body>
+</html>

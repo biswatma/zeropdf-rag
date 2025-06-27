@@ -4,8 +4,6 @@ from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
-import requests
-
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -30,15 +28,19 @@ def process_pdf(file_path):
     for page in reader.pages:
         text = page.extract_text()
         if text:
-            # Simple chunking: split by paragraphs or sentences.
-            # For more advanced RAG, consider recursive character text splitter.
             chunks = [chunk.strip() for chunk in text.split('\n\n') if chunk.strip()]
             text_chunks.extend(chunks)
+
+    if not text_chunks:
+        raise ValueError("No readable text found in PDF")
 
     documents = text_chunks
     model = load_embedding_model()
     embeddings = model.encode(documents)
     embeddings = np.array(embeddings).astype('float32')
+
+    if len(embeddings.shape) != 2 or embeddings.shape[0] == 0:
+        raise ValueError("Failed to generate valid embeddings from text")
 
     vector_store = faiss.IndexFlatL2(embeddings.shape[1])
     vector_store.add(embeddings)
@@ -46,7 +48,12 @@ def process_pdf(file_path):
 
 @app.route('/')
 def index():
+    app.logger.info("Serving index.html")
     return render_template('index.html')
+
+@app.route('/test')
+def test_model_load():
+    return render_template('test_model_load.html')
 
 @app.route('/upload_pdf', methods=['POST'])
 def upload_pdf():
@@ -61,8 +68,8 @@ def upload_pdf():
         process_pdf(filepath)
         return jsonify({"message": "PDF processed successfully!"}), 200
 
-@app.route('/ask_question', methods=['POST'])
-def ask_question():
+@app.route('/get_context', methods=['POST'])
+def get_context():
     if vector_store is None:
         return jsonify({"error": "Please upload a PDF first."}), 400
 
@@ -78,32 +85,8 @@ def ask_question():
     D, I = vector_store.search(question_embedding, k)
     retrieved_chunks = [documents[i] for i in I[0]]
 
-    # Construct prompt for LM Studio
     context = "\n".join(retrieved_chunks)
-    prompt = f"Context: {context}\n\nQuestion: {user_question}\n\nAnswer:"
-
-    # Call LM Studio API
-    lm_studio_url = "http://localhost:1234/v1/chat/completions" # Default LM Studio API endpoint
-    headers = {"Content-Type": "application/json"}
-    data = {
-        "model": "local-model", # Replace with your LM Studio model name if different
-        "messages": [
-            {"role": "system", "content": "You are a helpful assistant that answers questions based on the provided context."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.7
-    }
-
-    try:
-        response = requests.post(lm_studio_url, headers=headers, json=data)
-        response.raise_for_status() # Raise an exception for HTTP errors
-        lm_response = response.json()
-        answer = lm_response['choices'][0]['message']['content']
-        return jsonify({"answer": answer}), 200
-    except requests.exceptions.ConnectionError:
-        return jsonify({"error": "Could not connect to LM Studio API. Please ensure it is running at http://localhost:1234."}), 500
-    except Exception as e:
-        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+    return jsonify({"context": context}), 200
 
 if __name__ == '__main__':
     app.run(debug=True)

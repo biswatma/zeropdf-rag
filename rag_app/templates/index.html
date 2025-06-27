@@ -27,14 +27,14 @@
             line-height: 1.5;
         }
         .user-message {
-            background-color: #3b82f6; /* blue-500 */
+            background-color: #3b82f6;
             color: white;
             align-self: flex-end;
             border-bottom-right-radius: 0.4rem;
         }
         .bot-message {
-            background-color: #e5e7eb; /* gray-200 */
-            color: #374151; /* gray-700 */
+            background-color: #e5e7eb;
+            color: #374151;
             align-self: flex-start;
             border-bottom-left-radius: 0.4rem;
         }
@@ -77,7 +77,6 @@
             <div class="p-8 border border-gray-200 rounded-lg bg-gradient-to-br from-green-50 to-teal-100 shadow-md">
                 <h2 class="text-2xl font-bold text-gray-800 mb-5">Ask a Question</h2>
                 <div id="chatbox" class="h-96 overflow-y-auto border border-gray-300 rounded-lg p-5 mb-6 bg-white shadow-inner flex flex-col space-y-3">
-                    <!-- Chat messages will appear here -->
                     <div class="message-bubble bot-message self-start">
                         Upload a PDF to get started!
                     </div>
@@ -94,6 +93,62 @@
     </div>
 
     <script>
+        // Test worker initialization
+        console.log("Creating web worker...");
+        const worker = new Worker('{{ url_for("static", filename="js/worker.js") }}', { type: 'module' });
+        let isModelReady = false;
+        
+        worker.onerror = (e) => {
+            console.error("Worker Error Details:", {
+                message: e.message,
+                filename: e.filename,
+                lineno: e.lineno,
+                colno: e.colno,
+                error: e.error
+            });
+            addMessage('bot', `Worker Error: ${e.message || 'Check console for details'}`);
+        };
+        
+        // Add model loading status container
+        const statusContainer = document.createElement('div');
+        statusContainer.id = 'modelStatus';
+        statusContainer.className = 'fixed bottom-4 left-4 bg-white p-4 rounded-lg shadow-lg';
+        document.body.appendChild(statusContainer);
+
+        worker.onmessage = (event) => {
+            const { type, status, message, answer, progress, file } = event.data;
+            
+            if (type === 'progress') {
+                const progressPercent = Math.round(progress * 100);
+                statusContainer.innerHTML = `
+                    <div class="mb-2 text-sm font-medium">Downloading model files...</div>
+                    <div class="w-full bg-gray-200 rounded-full h-2.5">
+                        <div class="bg-blue-600 h-2.5 rounded-full" style="width: ${progressPercent}%"></div>
+                    </div>
+                    <div class="mt-1 text-xs text-gray-600">${file} (${progressPercent}%)</div>
+                `;
+            } else if (type === 'status') {
+                if (status === 'ready') {
+                    isModelReady = true;
+                    statusContainer.innerHTML = `
+                        <div class="flex items-center text-green-600">
+                            <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                            </svg>
+                            Model loaded and ready!
+                        </div>
+                    `;
+                    setTimeout(() => statusContainer.remove(), 3000);
+                }
+                console.log(message);
+            } else if (type === 'result') {
+                const chatbox = document.getElementById('chatbox');
+                const loadingMessage = chatbox.querySelector('.spinner').parentElement;
+                chatbox.removeChild(loadingMessage);
+                addMessage('bot', answer);
+            }
+        };
+
         document.getElementById('uploadForm').addEventListener('submit', async function(event) {
             event.preventDefault();
             const formData = new FormData();
@@ -145,32 +200,58 @@
             addMessage('user', question);
             questionInput.value = '';
 
-            const loadingMessage = addMessage('bot', '<div class="spinner"></div>', true); // Add loading spinner
+            const loadingMessage = addMessage('bot', `
+                <div class="flex flex-col items-center">
+                    <div class="spinner mb-2"></div>
+                    <div id="modelLoadingStatus" class="text-sm text-gray-600">
+                        Preparing AI model...
+                    </div>
+                </div>
+            `, true);
 
             try {
-                const response = await fetch('/ask_question', {
+                if (!isModelReady) {
+                    const statusElement = loadingMessage.querySelector('#modelLoadingStatus');
+                    statusElement.textContent = "Model is still loading. Please wait...";
+                    statusElement.classList.add('text-red-500');
+                    return;
+                }
+
+                const contextResponse = await fetch('/get_context', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ question: question })
                 });
-                const result = await response.json();
 
-                // Remove loading spinner
-                chatbox.removeChild(loadingMessage);
-
-                if (response.ok) {
-                    addMessage('bot', result.answer);
-                } else {
-                    addMessage('bot', `Error: ${result.error}`);
+                if (!contextResponse.ok) {
+                    throw new Error("Failed to get context");
                 }
+
+                const contextResult = await contextResponse.json();
+                try {
+                    const channel = new MessageChannel();
+                    channel.port1.onmessage = (event) => {
+                        if (event.data.error) {
+                            throw new Error(event.data.error);
+                        }
+                        // Handle successful response
+                    };
+                    
+                    worker.postMessage({
+                        type: 'generate',
+                        prompt: question,
+                        context: contextResult.context
+                    }, [channel.port2]);
+                } catch (error) {
+                    console.error("Message channel error:", error);
+                    chatbox.removeChild(loadingMessage);
+                    addMessage('bot', `Communication error: ${error.message}`);
+                }
+
             } catch (error) {
-                // Remove loading spinner
                 chatbox.removeChild(loadingMessage);
-                addMessage('bot', `Network error: ${error.message}`);
+                addMessage('bot', `Error: ${error.message}`);
             }
-            chatbox.scrollTop = chatbox.scrollHeight; // Scroll to bottom
         }
 
         function addMessage(sender, text, isHtml = false) {
@@ -190,8 +271,8 @@
                 messageDiv.textContent = text;
             }
             chatbox.appendChild(messageDiv);
-            chatbox.scrollTop = chatbox.scrollHeight; // Scroll to bottom
-            return messageDiv; // Return the message element for potential removal (e.g., loading spinner)
+            chatbox.scrollTop = chatbox.scrollHeight;
+            return messageDiv;
         }
     </script>
 </body>

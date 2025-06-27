@@ -2,4 +2,3 @@ Flask
 pypdf
 sentence-transformers
 faiss-cpu
-requests
